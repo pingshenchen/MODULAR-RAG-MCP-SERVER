@@ -60,6 +60,11 @@ class MockLLMSettings:
     model: str = "gpt-4o-mini"
     temperature: float = 0.0
     max_tokens: int = 1024
+    api_key: str | None = None
+    base_url: str | None = None
+    api_version: str | None = None
+    azure_endpoint: str | None = None
+    deployment_name: str | None = None
 
 
 @dataclass
@@ -359,6 +364,21 @@ class TestDeepSeekLLM:
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "env-key"}):
             llm = DeepSeekLLM(settings)
             assert llm.api_key == "env-key"
+
+    def test_init_with_settings_api_key(self):
+        """Should initialize with API key from settings."""
+        settings = MockSettings(
+            llm=MockLLMSettings(
+                provider="deepseek",
+                model="deepseek-chat",
+                api_key="settings-key",
+                base_url="https://api.deepseek.com",
+            )
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            llm = DeepSeekLLM(settings)
+            assert llm.api_key == "settings-key"
+            assert llm.base_url == "https://api.deepseek.com"
     
     def test_init_missing_api_key(self):
         """Should raise error when API key is missing."""

@@ -1,27 +1,27 @@
 ---
 name: setup
-description: "Interactive project setup wizard. From a clean codebase, guides user through provider selection (OpenAI/Azure/DeepSeek/Ollama/Qwen/Gemini/etc.), API key configuration, dependency installation, config generation, and launches the dashboard. If user selects an unimplemented provider, auto-scaffolds the provider code following the plugin architecture. Auto-diagnoses and fixes startup failures with up to 3 retry rounds. Use when user says 'setup', 'set up', 'configure', 'init project', '初始化', '环境配置', '项目配置', 'first run', 'get started', 'quick start', or wants to configure and launch the project from scratch."
+description: "Interactive project setup wizard. From a clean codebase, guide the user through environment selection, provider configuration, dependency installation, config generation, validation, and dashboard launch. Prefer Conda when available, use the rag-mcp Conda environment for this repository, and only fall back to .venv when Conda is unavailable. If the user selects an unimplemented provider, scaffold it following the plugin architecture. Auto-diagnose and fix startup failures with up to 3 retry rounds."
 ---
 
 # Setup
 
-Interactive wizard: configure providers → install deps → generate config → launch dashboard → auto-fix issues.
+Interactive wizard: configure providers -> select environment -> install deps -> generate config -> launch dashboard -> auto-fix issues.
 
 ---
 
 ## Pipeline
 
-```
-Preflight → Ask User → Generate Config → Install Deps → Validate → Launch → Usage Guide
+```text
+Preflight -> Select Environment -> Ask User -> Generate Config -> Install Deps -> Validate -> Launch -> Usage Guide
 ```
 
-> Auto-fix loop: if any step fails, diagnose → fix → retry (≤3 rounds).
+> Auto-fix loop: if any step fails, diagnose -> fix -> retry (up to 3 rounds).
 
 ---
 
 ## Step 1: Preflight Checks
 
-Verify prerequisites before asking the user anything:
+Verify prerequisites before asking the user anything.
 
 ### 1.1 Check Python Version
 
@@ -29,11 +29,46 @@ Verify prerequisites before asking the user anything:
 python --version          # Require >=3.10
 ```
 
-If Python < 3.10, stop and inform user to install a supported version.
+If Python < 3.10, stop and tell the user to install a supported version.
 
-### 1.2 Check & Create Virtual Environment
+### 1.2 Select Python Environment (Prefer Conda)
 
-Check if `.venv` directory already exists. If it does, skip creation and just activate it. If it does NOT exist, create it and activate it.
+Do **not** create `.venv` first. Always check whether `conda` is available before touching `.venv`.
+
+Environment policy for this repository:
+- Prefer Conda when available.
+- Default Conda environment name for this repo: `rag-mcp`
+- If `rag-mcp` already exists, use it directly.
+- If Conda exists but `rag-mcp` does not, create `rag-mcp` and use it.
+- Only fall back to `.venv` when Conda is unavailable.
+
+#### Option A: Conda is available (preferred)
+
+```powershell
+# Step 1: Check whether conda exists
+conda --version
+
+# Step 2: List environments and look for rag-mcp
+conda env list
+
+# Step 3a: If rag-mcp exists, verify it
+conda run -n rag-mcp python --version
+
+# Step 3b: If rag-mcp does NOT exist, create it first
+conda create -n rag-mcp python=3.11 -y
+
+# Step 4: Verify pip is available inside rag-mcp
+conda run -n rag-mcp python -m pip --version
+```
+
+Notes:
+- Prefer `conda run -n rag-mcp ...` for non-interactive automation instead of relying on `conda activate`.
+- All remaining `python` / `pip` commands in this skill must be executed inside the selected environment.
+- If the user explicitly names another Conda environment, follow the user's choice.
+
+#### Option B: Conda is unavailable (fallback to `.venv`)
+
+Check if `.venv` already exists. If it does, activate it and verify pip. If it does not exist, create it and then activate it.
 
 **Important:** Use `--without-pip` to avoid the slow `ensurepip` step that can hang on Windows, then bootstrap pip manually with `ensurepip` after activation.
 
@@ -41,7 +76,7 @@ Check if `.venv` directory already exists. If it does, skip creation and just ac
 # Step 1: Check if .venv exists
 Test-Path ".venv"
 
-# Step 2: If .venv does NOT exist, create it (fast, no pip bundling)
+# Step 2: If .venv does NOT exist, create it
 python -m venv .venv --without-pip
 
 # Step 3: Activate the virtual environment
@@ -54,137 +89,141 @@ python -m venv .venv --without-pip
 python -m ensurepip --upgrade
 
 # Step 5: Verify
-pip --version             # Should show pip path inside .venv
+pip --version
 ```
 
-If `.venv` already exists, only run Step 3 (activate) and Step 5 (verify).
+If `.venv` already exists, only run activation and verification.
+
+### 1.3 Optional Service Checks
+
+Before installation or launch, verify any local services required by the current config:
+- Docker Desktop / Docker Engine if the project depends on Dockerized services
+- Ollama if LLM or embedding provider is `ollama`
+- Any local vector DB or external endpoint explicitly configured in `config/settings.yaml`
+
+For Ollama:
+
+```powershell
+curl http://localhost:11434/api/tags
+```
 
 ---
 
 ## Step 2: Ask User for Configuration
 
-Use the `ask_questions` tool to gather provider choices. Ask in batches (max 4 questions per call).
+Use the available question-asking tool when needed. Ask in small batches. If a valid `config/settings.yaml` already exists, prefer reusing it and only ask about missing or risky fields.
 
 ### Batch 1: Core Providers
 
-Ask these questions together:
+Ask these together when configuration is missing or the user wants a fresh setup:
 
-1. **LLM Provider** — Which LLM provider?
+1. **LLM Provider**
    - Options: `OpenAI`, `Azure OpenAI`, `DeepSeek`, `Ollama (local)`, `Qwen (Alibaba Cloud)`, `Gemini (Google)`
    - Recommended: `OpenAI`
-   - Built-in: OpenAI, Azure, DeepSeek, Ollama. Others require auto-scaffolding (see Step 2.5).
+   - Built-in: OpenAI, Azure, DeepSeek, Ollama
 
-2. **Embedding Provider** — Which embedding provider?
+2. **Embedding Provider**
    - Options: `OpenAI`, `Azure OpenAI`, `Ollama (local)`, `Qwen (Alibaba Cloud)`, `Gemini (Google)`
-   - Recommended: `OpenAI` (should match LLM provider when possible)
-   - Built-in: OpenAI, Azure, Ollama. Others require auto-scaffolding (see Step 2.5).
+   - Recommended: match the LLM provider when possible
+   - Built-in: OpenAI, Azure, Ollama
 
-3. **Vision** — Enable vision/image captioning?
+3. **Vision**
    - Options: `Yes`, `No`
    - Recommended: `Yes`
 
-4. **Rerank** — Enable reranking?
+4. **Rerank**
    - Options: `No (fastest)`, `Cross-Encoder (local model)`, `LLM-based`
    - Recommended: `No (fastest)`
-   - ⚠️ Note: Cross-Encoder 仅完成了本地代码实现，尚未经过充分测试，可能存在兼容性问题。建议优先选择「不启用」或「LLM 重排序」。
+   - Note: local cross-encoder support may need extra dependency installation and validation.
 
-### Batch 2: Credentials (based on Batch 1 answers)
+### Batch 2: Credentials
 
-Ask for credentials based on selected providers. Refer to [references/provider_profiles.md](references/provider_profiles.md) for required fields per provider.
+Refer to [references/provider_profiles.md](references/provider_profiles.md) for required fields per provider.
 
-**If OpenAI selected:**
-- Ask: OpenAI API Key
-- Ask: LLM model (default: `gpt-4o`)
-- Ask: Embedding model (default: `text-embedding-ada-002`)
+If OpenAI selected:
+- Ask for OpenAI API Key
+- Ask for LLM model, default `gpt-4o`
+- Ask for embedding model, default `text-embedding-ada-002`
 
-**If Azure OpenAI selected:**
-- Ask: Azure API Key
-- Ask: Azure Endpoint URL
-- Ask: LLM deployment name (default: `gpt-4o`)
-- Ask: Embedding deployment name (default: `text-embedding-ada-002`)
+If Azure OpenAI selected:
+- Ask for Azure API Key
+- Ask for Azure endpoint URL
+- Ask for LLM deployment name, default `gpt-4o`
+- Ask for embedding deployment name, default `text-embedding-ada-002`
 
-**If DeepSeek selected:**
-- Ask: DeepSeek API Key
-- Ask: Embedding provider separately (DeepSeek has no embeddings — must use OpenAI/Ollama)
+If DeepSeek selected:
+- Ask for DeepSeek API Key
+- Ask for embedding provider separately because DeepSeek has no embeddings
 
-**If Ollama selected:**
-- Ask: Ollama base URL (default: `http://localhost:11434`)
-- Ask: LLM model name (default: `llama3`)
-- Ask: Embedding model name (default: `nomic-embed-text`)
-- Verify Ollama is running: `curl http://localhost:11434/api/tags` or equivalent
+If Ollama selected:
+- Ask for Ollama base URL, default `http://localhost:11434`
+- Ask for LLM model name, default `llama3`
+- Ask for embedding model name, default `nomic-embed-text`
+- Verify Ollama is running before continuing
 
-**If Qwen selected:**
-- Ask: Qwen API Key (DashScope)
-- Ask: LLM model (default: `qwen-turbo`)
-- Ask: Embedding model (default: `text-embedding-v3`) — if Qwen also chosen for embedding
-- Base URL: `https://dashscope.aliyuncs.com/compatible-mode/v1` (OpenAI-compatible)
+If Qwen selected:
+- Ask for Qwen API Key
+- Ask for LLM model, default `qwen-turbo`
+- Ask for embedding model, default `text-embedding-v3`
+- Use base URL `https://dashscope.aliyuncs.com/compatible-mode/v1`
 
-**If Gemini selected:**
-- Ask: Gemini API Key (Google AI Studio)
-- Ask: LLM model (default: `gemini-2.0-flash`)
-- Ask: Embedding model (default: `text-embedding-004`) — if Gemini also chosen for embedding
-- Base URL: `https://generativelanguage.googleapis.com/v1beta/openai/` (OpenAI-compatible)
+If Gemini selected:
+- Ask for Gemini API Key
+- Ask for LLM model, default `gemini-2.0-flash`
+- Ask for embedding model, default `text-embedding-004`
+- Use base URL `https://generativelanguage.googleapis.com/v1beta/openai/`
 
-### Batch 3: Vision Credentials (if vision enabled)
+### Batch 3: Vision Credentials
 
-Vision LLM has its **own independent config section** (`vision_llm`) with separate `provider`, `api_key`, `azure_endpoint`, etc. Do NOT assume it shares credentials with the main LLM.
+`vision_llm` is independent from the main `llm` section. Do not assume it shares credentials.
 
-Ask up to 2 questions:
+Ask:
+1. Which provider should be used for vision/image captioning?
+2. Whether vision can reuse the same credentials if it matches the main LLM provider
+3. If not reused, ask for separate API key / endpoint / model
 
-1. **Vision Provider** — Which provider for vision/image captioning?
-   - Options: same as LLM provider list, but default to user's LLM choice
-   - Built-in vision: OpenAI, Azure. Others require auto-scaffolding.
+Recommended models:
+- OpenAI: `gpt-4o`
+- Azure: `gpt-4o`
+- Ollama: `llava`
+- Qwen: `qwen-vl-max`
+- Gemini: `gemini-2.0-flash`
 
-2. **Vision credentials** — based on provider:
-   - If vision provider == LLM provider: ask "Reuse the same API key/endpoint for vision?" (default: Yes)
-     - If Yes: copy LLM credentials to vision config
-     - If No: ask for separate vision API key / endpoint
-   - If vision provider != LLM provider: ask for vision-specific API key / endpoint / model
-
-Vision models per provider (recommended model listed first):
-
-| Provider | Recommended | Other Options | Notes |
-|----------|------------|---------------|-------|
-| OpenAI | `gpt-4o` | `gpt-4o-mini`, `gpt-4-turbo` | gpt-4o-mini 更便宜，适合简单图片描述 |
-| Azure | `gpt-4o` | `gpt-4o-mini`, `gpt-4-turbo` | 需要 deployment_name + azure_endpoint |
-| Ollama | `llava` | `llava:13b`, `llava:34b`, `llava-llama3`, `bakllava`, `moondream` | moondream 最轻量，llava:34b 质量最高 |
-| Qwen | `qwen-vl-max` | `qwen-vl-plus`, `qwen2.5-vl-72b-instruct`, `qwen2.5-vl-7b-instruct` | qwen-vl-plus 性价比高 |
-| Gemini | `gemini-2.0-flash` | `gemini-1.5-pro`, `gemini-2.0-flash-lite`, `gemini-1.5-flash` | gemini-1.5-pro 质量最高但较慢 |
-| DeepSeek | ❌ 无 Vision 模型 | — | 需选择其他 provider 作为 Vision LLM |
+DeepSeek does not provide a built-in vision model in this project, so choose another provider for `vision_llm`.
 
 ---
 
-## Step 2.5: Scaffold Unimplemented Providers (if needed)
+## Step 2.5: Scaffold Unimplemented Providers
 
-If the user selected a provider not yet built-in (e.g., Qwen, Gemini, or any custom provider), auto-scaffold the implementation before proceeding to config generation.
+If the user selected a provider that is not yet built in, scaffold it before generating config.
 
-Refer to [references/new_provider_guide.md](references/new_provider_guide.md) for the complete scaffolding procedure.
+Refer to [references/new_provider_guide.md](references/new_provider_guide.md).
 
 Summary:
-1. Create LLM class in `src/libs/llm/{name}_llm.py` (extend `BaseLLM`)
-2. Create Embedding class in `src/libs/embedding/{name}_embedding.py` (extend `BaseEmbedding`) — if needed
-3. Create Vision LLM class in `src/libs/llm/{name}_vision_llm.py` (extend `BaseVisionLLM`) — if needed
-4. Register in `src/libs/llm/__init__.py` and `src/libs/embedding/__init__.py`
-5. Add `base_url` field to `LLMSettings` / `EmbeddingSettings` if the provider uses a custom endpoint
-6. Install provider SDK: `pip install <sdk>` if needed
-7. Add provider profile to `references/provider_profiles.md`
+1. Create `src/libs/llm/{name}_llm.py` extending `BaseLLM`
+2. Create `src/libs/embedding/{name}_embedding.py` extending `BaseEmbedding` if needed
+3. Create `src/libs/llm/{name}_vision_llm.py` extending `BaseVisionLLM` if needed
+4. Register the new classes in package `__init__.py` files
+5. Add `base_url` fields to settings models if the provider needs custom endpoints
+6. Install provider SDK if needed
+7. Update provider reference docs
 
-Many providers (Qwen, Gemini, Groq, Mistral, etc.) are OpenAI-compatible — simply subclass `OpenAILLM` / `OpenAIEmbedding` and override `DEFAULT_BASE_URL` + auth logic.
+Many providers are OpenAI-compatible and can subclass existing OpenAI implementations with a different base URL and auth handling.
 
 ---
 
 ## Step 3: Generate Config
 
-Read the template from [references/settings_template.yaml](references/settings_template.yaml) and fill in values based on user answers.
+Read the template from [references/settings_template.yaml](references/settings_template.yaml) and fill values based on user answers or the existing config.
 
 Key rules:
-- Look up `dimensions` from the model→dimensions table in [references/provider_profiles.md](references/provider_profiles.md)
-- For Ollama: set `base_url`, leave `api_key`/`azure_endpoint`/`deployment_name` empty
-- For OpenAI: leave `azure_endpoint`/`deployment_name`/`api_version` empty
-- If vision disabled: set `vision_llm.enabled: false`
-- For rerank: set `enabled`, `provider`, and `model` accordingly
+- Look up embedding `dimensions` from [references/provider_profiles.md](references/provider_profiles.md)
+- For Ollama, set `base_url` and leave API-key and Azure-specific fields empty
+- For OpenAI, leave Azure-specific fields empty
+- If vision is disabled, set `vision_llm.enabled: false`
+- For rerank, set `enabled`, `provider`, and `model` correctly
 
-Write the generated config to `config/settings.yaml`.
+Write the final config to `config/settings.yaml`.
 
 Also ensure required directories exist:
 
@@ -196,14 +235,16 @@ python -c "from pathlib import Path; [Path(d).mkdir(parents=True, exist_ok=True)
 
 ## Step 4: Install Dependencies
 
+Run installation inside the environment selected in Step 1.2.
+
 ```powershell
 pip install -e ".[dev]"
 ```
 
-If specific providers need extra packages:
-- **Cross-Encoder rerank**: `pip install sentence-transformers`
-- **Streamlit dashboard**: `pip install streamlit`
-- **OpenAI**: `pip install openai`
+If specific providers or features need extra packages:
+- Cross-Encoder rerank: `pip install sentence-transformers`
+- Streamlit dashboard: `pip install streamlit`
+- OpenAI family providers: `pip install openai`
 
 Verify critical imports:
 
@@ -217,43 +258,45 @@ python -c "import openai; print('OpenAI SDK OK')"
 
 ## Step 5: Validate Configuration
 
-Test that the config loads correctly:
+Run validation inside the environment selected in Step 1.2.
 
 ```powershell
 python -c "from src.core.settings import load_settings; s = load_settings(); print(f'Config OK: LLM={s.llm.provider}/{s.llm.model}, Embed={s.embedding.provider}/{s.embedding.model}')"
 ```
 
-If this fails, enter **auto-fix loop**:
+If this fails, enter the auto-fix loop.
 
-### Auto-Fix Loop (≤3 rounds)
+### Auto-Fix Loop (up to 3 rounds)
 
-```
+```text
 Round 0..2:
   Read error message
-  Diagnose root cause (missing field, wrong type, bad provider name, etc.)
-  Fix config/settings.yaml or install missing dependency
+  Diagnose root cause
+  Fix config/settings.yaml or install the missing dependency
   Re-validate
-  If pass → continue to Step 6
-  If fail → next round
+  If pass -> continue to Step 6
+  If fail -> next round
 ```
 
 Common fixes:
-- `SettingsError: Missing required field` → add the field to settings.yaml
-- `ModuleNotFoundError` → `pip install <package>`
-- `Connection refused` (Ollama) → inform user to start Ollama service
-- Wrong `dimensions` value → look up correct value from provider_profiles.md
+- Missing required field -> add it to `config/settings.yaml`
+- `ModuleNotFoundError` -> install the missing package in the selected environment
+- `Connection refused` for Ollama -> tell the user to start Ollama
+- Wrong `dimensions` -> correct it using provider reference data
 
-If 3 rounds fail, report the issue to the user with diagnosis and ask for help.
+If all 3 rounds fail, report the diagnosis clearly and stop for user input.
 
 ---
 
 ## Step 6: Launch Dashboard
 
+Run the dashboard inside the environment selected in Step 1.2.
+
 ```powershell
 python scripts/start_dashboard.py --port 8501
 ```
 
-Run this as a **background process**. Wait a few seconds, then verify it's accessible:
+Run it as a background process. Then verify health:
 
 ```powershell
 python -c "
@@ -266,19 +309,22 @@ except Exception as e:
 "
 ```
 
-If the dashboard fails to start, enter auto-fix loop:
-- Read the error output from the background terminal
-- Common issues: missing `streamlit`, port already in use, import errors
-- Fix and retry
+If startup fails, use the same auto-fix loop:
+- inspect the background error output
+- install missing dependencies
+- resolve import or port conflicts
+- retry launch
 
 ---
 
 ## Step 7: Usage Guide
 
-After successful launch, present this to the user:
+After successful launch, present a concise completion message in the user's language.
 
-```
-🎉 Setup Complete!
+Suggested template:
+
+```text
+Setup Complete!
 
 Dashboard: http://localhost:8501
 
@@ -292,6 +338,7 @@ Configuration: config/settings.yaml
 Logs:          logs/traces.jsonl
 
 Provider: {provider} / Model: {model}
+Environment: {environment}
 ```
 
-Adapt the message based on the user's chosen providers and language (Chinese if user communicates in Chinese).
+If the user communicates in Chinese, answer in Chinese.
