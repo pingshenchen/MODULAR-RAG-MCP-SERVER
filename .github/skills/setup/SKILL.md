@@ -1,21 +1,25 @@
 ---
 name: setup
-description: "Interactive project setup wizard. From a clean codebase, guide the user through environment selection, provider configuration, dependency installation, config generation, validation, and dashboard launch. Prefer Conda when available, use the rag-mcp Conda environment for this repository, and only fall back to .venv when Conda is unavailable. If the user selects an unimplemented provider, scaffold it following the plugin architecture. Auto-diagnose and fix startup failures with up to 3 retry rounds."
+description: "Interactive project setup wizard. Trigger this skill when the user types `setup` or `启动 setup` in GitHub Copilot Chat / Claude Chat for this repository. From a clean codebase, guide the user through environment selection, provider configuration, dependency installation, config generation, validation, and dashboard launch. Enforce the workflow in strict order. Prefer Conda when available, use the `rag-mcp` Conda environment for this repository, and only fall back to `.venv` when Conda is unavailable. If the user selects an unimplemented provider, scaffold it following the plugin architecture. Auto-diagnose and fix startup failures with up to 3 retry rounds. If any prerequisite service must be started or restarted during setup, stop after reporting that action and do not launch the dashboard in the same run."
 ---
 
 # Setup
 
-Interactive wizard: configure providers -> select environment -> install deps -> generate config -> launch dashboard -> auto-fix issues.
+Trigger this skill by typing `setup` in GitHub Copilot Chat / Claude Chat inside this repository.
+
+Interactive wizard: preflight -> configure providers -> select environment -> generate config -> install deps -> validate -> service gate -> launch dashboard -> usage guide.
 
 ---
 
 ## Pipeline
 
 ```text
-Preflight -> Select Environment -> Ask User -> Generate Config -> Install Deps -> Validate -> Launch -> Usage Guide
+Preflight -> Select Environment -> Ask User -> Generate Config -> Install Deps -> Validate -> Service Readiness Gate -> Launch Dashboard -> Usage Guide
 ```
 
 > Auto-fix loop: if any step fails, diagnose -> fix -> retry (up to 3 rounds).
+> Strict-order rule: never skip ahead, never reorder steps, and never launch the dashboard before all previous steps are complete.
+> Hard stop rule: if setup discovers that any prerequisite service must be started, restarted, or manually fixed, stop the flow after reporting that requirement. Do not open the dashboard in that same run.
 
 ---
 
@@ -106,6 +110,12 @@ For Ollama:
 ```powershell
 curl http://localhost:11434/api/tags
 ```
+
+If a required local service is not already healthy:
+- Tell the user exactly which service must be started or restarted.
+- Stop the setup flow at that point.
+- Do not continue to dependency installation, validation, or dashboard launch in the same run.
+- Resume only after the user confirms the service is up and reruns `setup`.
 
 ---
 
@@ -288,7 +298,24 @@ If all 3 rounds fail, report the diagnosis clearly and stop for user input.
 
 ---
 
-## Step 6: Launch Dashboard
+## Step 6: Service Readiness Gate
+
+Before launching the dashboard, re-check whether the full stack is ready.
+
+Gate rules:
+- All previous steps must have completed successfully.
+- Any required local service must already be running and healthy.
+- If the setup flow required the user to start, restart, or manually repair any service during this run, do not launch the dashboard.
+- Dashboard launch is only allowed when the entire setup completed cleanly in order without a pending service action.
+
+If the gate fails:
+- Explain which service or manual action is still pending.
+- Tell the user to complete that action first.
+- Stop here and do not continue to dashboard launch.
+
+---
+
+## Step 7: Launch Dashboard
 
 Run the dashboard inside the environment selected in Step 1.2.
 
@@ -317,7 +344,7 @@ If startup fails, use the same auto-fix loop:
 
 ---
 
-## Step 7: Usage Guide
+## Step 8: Usage Guide
 
 After successful launch, present a concise completion message in the user's language.
 
@@ -329,6 +356,7 @@ Setup Complete!
 Dashboard: http://localhost:8501
 
 Quick Start:
+  0. Trigger setup skill:  type `setup` in GitHub Copilot Chat / Claude Chat
   1. Ingest documents:  python scripts/ingest.py <path-to-pdf-or-folder>
   2. Query:             python scripts/query.py "your question here"
   3. Dashboard:         python scripts/start_dashboard.py
